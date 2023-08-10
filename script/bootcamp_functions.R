@@ -1,6 +1,5 @@
 ##Functions for GS bootcamp course
 
-rm(list = ls())
 library(pacman)
 pacman::p_load(vcfR,
                tibble,

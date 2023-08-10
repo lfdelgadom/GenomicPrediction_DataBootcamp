@@ -165,7 +165,7 @@ colnames(geno_imp) <- colnames(geno_num5)
 # Select a seed number
 set.seed(1234)
 
-ssNdx <- sample.int(n = dim(pheno_data3)[1], size=1000) 
+ssNdx <- sample.int(n = dim(pheno_data3)[1], size=3000) 
 
 
 geno_imp_sub <- geno_imp[ssNdx, ]
@@ -190,13 +190,18 @@ rownames(geno_imp_sub) <- pheno_sub$RIL
 # "": This is the replacement string, which means that the matched pattern 
 # (last three characters) will be replaced with nothing (in essence, they will be removed).
 fam <- gsub("...$", "", rownames(geno_imp_sub))
-ndxFam <- which(fam=="DS11-64")
 
+# selecting indices belong to following families
+ndxFam <- which(fam %in% c("DS11-64", "DS11-54"))
+
+# Pheno training population
 pheno_sub_trn <- pheno_sub
 
-pheno_sub_trn$Seedsize[ndxFam] <- NA # removing family DS11-64  
+# removing families Seedzise values of family selected above
+pheno_sub_trn$Seedsize[ndxFam] <- NA 
 
-G <- A.mat(geno_imp_sub) # Calculate a genomic relationship matrix using the rrBLUP function A.mat
+# Calculate the realized additive relationship matrix using the rrBLUP package
+G <- A.mat(geno_imp_sub)
 
 # Save the relationship matrix plot into a pdf
 pdf(file = paste0(here::here(), "/", "G_matrix.pdf"))
@@ -205,46 +210,35 @@ heatmap(G, scale="column", col = terrain.colors(256),
                   main = "Genomic Relationship Matrix Heatmap")
 dev.off()
 
-
-
-# G matrix scaled
+# scale the additive relationship matrix
+# sometimes is useful work with G matrix scaled and centered.
 gscale <- scale(G, center = T, scale = T)
 
-# sometimes is usefful work with G matrix scaled and centered.
 
+# The dist() function calculates the pairwise Euclidean distances between rows of gscale. 
 D <- (as.matrix(dist(gscale, method = "euclidean"))^2)/dim(geno_imp)[2]
 
+# The variable h is set to 0.5. Then, the code calculates a kernel matrix K 
+# using the exponential function. The kernel matrix is calculated by 
+# exponentiating the negative product of h and the previously calculated 
+# distance matrix D. The kernel matrix is used to capture relationships between observations.
 h <- 0.5
-
 K <- exp(-h*D)
+
+
+
+
+# BayesC model ------------------------------------------------------------
 
 # The BGLR package has us first create a list specifying the parameters and 
 # some inputs such as marker data and model type
 ETA <- list(list(K=NULL, X=geno_imp_sub, model='BayesC', probIn=.10)) 
 
-# We can add Genomic relationship matrix scaled as a imput to the model
-# When we add the G matrix, it is mandatory remove the genotypic data, 
-# because G Matrix already contents Geno infomation.
+# executing the model
+model_bglr <- BGLR(y=pheno_sub_trn$Seedsize, ETA=ETA, burnIn=500, nIter=2000, verbose=TRUE)
 
-# Fitting a Single Kernel Model in BGLR
-# The BGLR package has us first create a list specifying the parameters and 
-# some inputs such as marker data and model type
-ETA <- list(list(K=K, X=NULL, model='RKHS', probIn=.10)) 
-
-model_bglr <- BGLR(y=pheno_sub_trn$Seedsize, ETA=ETA, burnIn=500, nIter=2000, 
-                   saveAt='RKHS_h=0.5_') 
-
-# We can add Genomic relationship matrix as a imput to the model
-
-"ETA <- list(list(K=G, X=geno_imp_sub, model='BayesC', probIn=.10)) 
-#The BGLR package has us first create a list specifying the parameters and 
-some inputs such as marker data and model type"
-
-
-#model_bglr <- BGLR(y=pheno_sub_trn$Seedsize, ETA=ETA, burnIn=500, nIter=2000, verbose=TRUE) 
-
-# BGLR directly outputs the genotype predictions as yHat
-gebv_bglr <- model_bglr$yHat  
+#BGLR directly outputs the genotype predictions as yHat
+gebv_bglr <- model_bglr$yHat 
 
 # Extract marker effect predictions from model object. 
 # Try different models, changing the name of the object storing the effect 
@@ -252,27 +246,89 @@ gebv_bglr <- model_bglr$yHat
 bhat <- model_bglr$ETA[[1]]$b
 
 # Here is a way to make a trace plot
-plot(bhat^2, ylab='Estimated squared marker effect', type='o')
+x11(); plot(bhat^2, ylab='Estimated squared marker effect', type='o')
 
 
-##Correlate predictions of RILs left out of the analysis, with predictions
-cor(pheno_sub$Seedsize[ndxFam],  gebv_bglr[ndxFam])
+# BayesB model ------------------------------------------------------------
+ETA_B <- list(list(K=NULL, X=geno_imp_sub, model='BayesB', probIn=.10)) 
 
-family_DS11_64 <- 
+# executing the model
+model_bglr_B <- BGLR(y=pheno_sub_trn$Seedsize, ETA=ETA_B, burnIn=500, nIter=2000, verbose=TRUE)
+
+#BGLR directly outputs the genotype predictions as yHat
+gebv_bglr_B <- model_bglr_B$yHat 
+
+
+# BayesA ------------------------------------------------------------------
+ETA_A <- list(list(K=NULL, X=geno_imp_sub, model='BayesA', probIn=.10)) 
+
+# executing the model
+model_bglr_A <- BGLR(y=pheno_sub_trn$Seedsize, ETA=ETA_A, burnIn=500, nIter=2000, verbose=TRUE)
+
+#BGLR directly outputs the genotype predictions as yHat
+gebv_bglr_A <- model_bglr_A$yHat 
+
+
+# reproducing kernel Hilbert spaces  --------------------------------------
+# We can add Genomic relationship matrix scaled as a imput to the model
+# When we add the G matrix, it is mandatory remove the genotypic data, 
+# because G Matrix already contents Geno infomation.
+
+# Fitting a Single Kernel Model in BGLR
+# The BGLR package has us first create a list specifying the parameters and 
+# some inputs such as marker data and model type
+ETA_RKHS <- list(list(K=K, X=NULL, model='RKHS', probIn=.10)) 
+
+# executing the model
+model_bglr_RKHS <- BGLR(y=pheno_sub_trn$Seedsize, ETA=ETA_RKHS, burnIn=500, nIter=2000, 
+                   saveAt='RKHS_h=0.5_') 
+
+# BGLR directly outputs the genotype predictions as yHat
+gebv_bglr_RKHS <- model_bglr_RKHS$yHat  
+
+# Correlate predictions of RILs left out of the analysis, with predictions
+# cor(pheno_sub$Seedsize[ndxFam],  gebv_bglr[ndxFam])
+
+# Correlate predictions of RILs left out of the analysis, with pre --------
+
+family_NA <- 
   tibble(pheno_sub = c(pheno_sub$Seedsize[ndxFam]),
-       gebv_bglr = c(gebv_bglr[ndxFam]))
+         gebv_bglr = c(gebv_bglr[ndxFam]),
+         gebv_bglr_B = gebv_bglr_B[ndxFam],
+         gebv_bglr_A = gebv_bglr_A[ndxFam],
+         gebv_bglr_RKHS = gebv_bglr_RKHS[ndxFam])
 
 library(ggplot2)
 library(ggpubr)
 
-  family_DS11_64 %>% ggplot(aes(x = pheno_sub, y = gebv_bglr)) +
-  geom_point(shape = 19, 
-             size = 3) + 
-    stat_regline_equation() + 
-    geom_smooth(method = "lm", formula = y ~ x, se = FALSE) +
-    theme_bw()
-  
-ggsave("RKHS.png", units = "in", dpi = 300, width = 6, height = 6)
+ggplot(family_NA) +
+  geom_point(aes(x = pheno_sub, y = gebv_bglr_B),
+              shape = 19, 
+              size = 1) + 
+  geom_smooth(aes(pheno_sub, gebv_bglr_B, col="blue"), method="lm",se=FALSE) +
+  geom_point(aes(x = pheno_sub, y = gebv_bglr),
+              shape = 19, 
+              size = 1) +
+  geom_smooth(aes(pheno_sub, gebv_bglr, col="red"), method="lm",se=FALSE) +
+  geom_point(aes(x = pheno_sub, y = gebv_bglr_A),
+              shape = 19, 
+              size = 1) +
+  geom_smooth(aes(pheno_sub, gebv_bglr_A, col="purple"), method="lm",se=FALSE) +
+  geom_point(aes(x = pheno_sub, y = gebv_bglr_A),
+             shape = 19, 
+             size = 1) +
+  geom_point(aes(x = pheno_sub, y = gebv_bglr_RKHS),
+             shape = 19, 
+             size = 1) +
+  geom_smooth(aes(pheno_sub, gebv_bglr_RKHS, col="orange"), method="lm",se=FALSE) +
+  scale_color_identity(name = "Model fit",
+                       breaks = c("blue", "red", "purple", "orange"),
+                       labels = c("BayesB", "BayesC", "BayesA", "RKHS"),
+                       guide = "legend") +
+  labs(y = "Genotype predictions - seed Size (grams of 100 seeds)", 
+       x = "Phenotypic values - seed Size (grams of 100 seeds)")
+
+ggsave("models.png", units = "in", dpi = 300, width = 6, height = 6)
   
 # -------------------------------------------------------------------------
 
