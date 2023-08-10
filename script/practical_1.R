@@ -148,7 +148,7 @@ if (length(ndx3)>0) {
   geno_num5 <- geno_num4[, -ndx3] 
   } else {
     geno_num5 <- geno_num4
-    }
+  }
 
 # Add missing data
 # Calculating the total number of elements in a matrix
